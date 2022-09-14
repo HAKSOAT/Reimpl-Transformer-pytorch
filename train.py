@@ -5,10 +5,18 @@ from datetime import datetime
 
 import torch
 import numpy as np
+from torch.utils.data import DataLoader
+from torch.optim import Adam
 
+from datasets import IndexedInputTargetTranslationDataset
 from dictionaries import IndexDictionary
+from losses import LabelSmoothingLoss, TokenCrossEntropyLoss
+from metrics import AccuracyMetric
+from optimizers import NoamOptimizer
 from models import build_model
+from utils.pipe import input_target_collate_fn
 from utils.log import get_logger
+from trainer import EpochSeq2SeqTrainer
 
 parser = ArgumentParser(description="Train Transformer")
 parser.add_argument("--config", type=str, default=None)
@@ -76,6 +84,78 @@ def run_trainer(config):
 
     logger.info("Building model...")
     model = build_model(config, source_dictionary.vocabulary_size, target_dictionary.vocabulary_size)
+
+    logger.info(model)
+    encoder_parameter_count = sum([p.nelement() for p in model.encoder.parameters()])
+    logger.info(f"Encoder: {encoder_parameter_count} parameters")
+    decoder_parameter_count = sum([p.nelement() for p in model.decoder.parameters()])
+    logger.info(f"Decoder: {decoder_parameter_count} parameters")
+    total_parameter_count = sum([p.nelement() for p in model.parameters()])
+    logger.info(f"Total: {total_parameter_count} parameters")
+
+    logger.info("Loading datasets...")
+    train_dataset = IndexedInputTargetTranslationDataset(
+        data_dir=config["data_dir"],
+        phase="train",
+        vocabulary_size=config["vocabulary_size"],
+        limit=config["dataset_limit"]
+    )
+
+    val_dataset = IndexedInputTargetTranslationDataset(
+        data_dir=config["data_dir"],
+        phase="val",
+        vocabulary_size=config["vocabulary_size"],
+        limit=config["dataset_limit"]
+    )
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        collate_fn=input_target_collate_fn
+    )
+
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=config["batch_size"],
+        collate_fn=input_target_collate_fn
+    )
+
+    # Q: What does label smoothing do? Why are we using it?
+    if config["label_smoothing"] > 0.0:
+        loss_function = LabelSmoothingLoss(label_smoothing=config["label_smoothing"],
+                                           vocabulary_size=target_dictionary.vocabulary_size)
+    else:
+        loss_function = TokenCrossEntropyLoss()
+
+    accuracy_function = AccuracyMetric()
+
+    if config["optimizer"] == "Noam":
+        optimizer = NoamOptimizer(model.parameters(), d_model=config["d_model"])
+    elif config["optimizer"] == "Adam":
+        optimizer = Adam(model.parameters(), lr=config["lr"])
+    else:
+        raise NotImplementedError(f"Optimizer {config['optimizer']} does not exist.")
+
+    logger.info("Start training...")
+    trainer = EpochSeq2SeqTrainer(
+        model=model,
+        train_dataloader=train_dataloader,
+        val_dataloader=val_dataloader,
+        loss_function=loss_function,
+        metric_function=accuracy_function,
+        optimizer=optimizer,
+        logger=logger,
+        run_name=run_name,
+        save_config=config["save_config"],
+        save_checkpoint=config["save_checkpoint"],
+        config=config
+    )
+
+    trainer.run(config["epochs"])
+
+    return trainer
+
 
 if __name__ == "__main__":
     args = parser.parse_args()

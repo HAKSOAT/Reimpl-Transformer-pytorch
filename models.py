@@ -73,6 +73,8 @@ class Transformer(nn.Module):
         inputs_mask = subsequent_masking(inputs) | pad_masking(inputs, inputs_len)
 
         memory = self.encoder(sources, sources_mask)
+        # Q: Since we are not passing state or layer_cache at this point,
+        # I am concerned that it will never be used. So I need to run this code to check this out.
         outputs, state = self.decoder(inputs, memory, memory_mask, inputs_mask)
         return outputs
 
@@ -109,6 +111,7 @@ class TransformerDecoder:
             [TransformerDecoderLayer(d_model, heads_count, d_ff, dropout_prob) for _ in range(layers_count)]
         )
         # Q: What do embedding_dim and num_embedding mean here?
+        # A: Embedding_dim is the dimension for each token's embedding while num_embeddings refers to the number of tokens.
         self.generator = nn.Linear(embedding.embedding_dim, embedding.num_embeddings)
         self.generator.weight = self.embedding.weight
 
@@ -125,6 +128,8 @@ class TransformerDecoder:
                 # I: I find it very interesting how the state is used here, I am not sure yet
                 # but I think this is how the keys and values from the encoder and relayed to the
                 # decoder.
+                # Update: Yes, exactly the key and values in the memory attention are the embeddings
+                # passed from the encoder part of the set up.
                 state.update_state(
                     layer_index=layer_index,
                     layer_mode="self-attention",
@@ -139,6 +144,7 @@ class TransformerDecoder:
                     value_projected=decoder_layer.memory_attention_layer.sublayer.value_projected
                 )
 
+        # Q: I can't find any softmax function called on the linear layer here. Why?
         generated = self.generator(inputs)
         return generated, state
 
@@ -154,6 +160,9 @@ class MultiHeadAttention:
         # wholly. Makes a lot of sense.
         assert d_model % heads_count == 0
         # Q: What is the difference between self-attention and memory attention?
+        # A: Self attention here refers to attention calculated from a regular attention mechanism
+        # using only embeddings generated using a text. Memory attention refers to attention that uses
+        # external embeddings.
         assert mode in ("self-attention", "memory-attention")
 
         self.d_head = d_model // heads_count
@@ -177,6 +186,7 @@ class MultiHeadAttention:
         self.attention = None
 
         # Q: The code says these variables are for cache. But for caching what? When is the cache being used?
+        # A: Used to store embeddings such as the key and value embeddings from the encoder
         self.key_projected = None
         self.value_projected = None
 
@@ -197,6 +207,8 @@ class MultiHeadAttention:
                 key_projected = torch.cat([key_projected, layer_cache[self.mode]["key_projected"]], dim=1)
                 value_projected = torch.cat([value_projected, layer_cache[self.mode]["value_projected"]], dim=1)
             elif self.mode == "memory-attention":
+                # I: I find it interesting that the same key and value from the encoder are used on all layers of
+                # multi-head attention (note, not masked multi-head) in the decoder.
                 key_projected = layer_cache[self.mode]["key_projected"]
                 value_projected = layer_cache[self.mode]["value_projected"]
 
@@ -236,6 +248,8 @@ class MultiHeadAttention:
         # head and hence are in the same section.
         # Q: Since the splitting of the heads is done after projection, does this not mean that the same
         # weights are used for all the heads?
+        # A: Well, yes, but no. Since the linear is the length of the number of tokens before being split.
+        # The weights from 0-100 for example will be different from weights from 100-200.
         query_heads = query_projected.view(batch_size, query_len, self.heads_count, d_head).transpose(1, 2)
         key_heads = key_projected.view(batch_size, key_len, self.heads_count, d_head).transpose(1, 2)
         value_heads = value_projected.view(batch_size, value_len, self.heads_count, d_head).transpose(1, 2)
@@ -243,6 +257,8 @@ class MultiHeadAttention:
         attention_weights = self.scaled_dot_product(query_heads, key_heads)
 
         # Q: What type of value does mask expect as input?
+        # I: I find it interesting that masking is applied before softmax is done, so that we don't end up
+        # masking probability values by doing after softmax.
         if mask is not None:
             mask_expanded = mask.unsqueeze(1).expand_as(attention_weights)
             attention_weights = attention_weights.masked_fill(mask_expanded, -1e18)
@@ -309,6 +325,7 @@ class TransformerDecoderLayer(nn.Module):
         # Q: Interesting to see the memory-attention bit coming into play here
         # but it is not yet clear yet which is the masked multihead attention or the multihead attention
         # remember that the multihead attention takes into consideration the keys and values from the encoder.
+        # A: Self attention is used for masked multi-head.
         self.self_attention_layer = Sublayer(MultiHeadAttention(
             heads_count, d_model, dropout_prob, mode="self-attention"), d_model)
         self.memory_attention_layer = Sublayer(MultiHeadAttention(

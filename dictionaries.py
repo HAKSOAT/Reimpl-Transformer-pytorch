@@ -8,7 +8,7 @@ class IndexDictionary:
     def __init__(self, iterable=None, mode="shared", vocabulary_size=None):
         self.special_tokens = list(SPECIAL_TOKENS_INDEX.keys())
         if iterable is not None:
-            # Q: Not a question but a BIG NOTE. It is at this point that the integer values corresponding to the vocab
+            # I: Not a question but a BIG NOTE. It is at this point that the integer values corresponding to the vocab
             # tokens are set.
             self.vocab_tokens, self.token_counts = self._build_vocabulary(iterable, vocabulary_size)
             self.token_index_dict = {token: index for index, token in enumerate(self.vocab_tokens)}
