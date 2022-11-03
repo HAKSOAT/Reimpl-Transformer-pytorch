@@ -22,7 +22,7 @@ parser = ArgumentParser(description="Train Transformer")
 parser.add_argument("--config", type=str, default=None)
 
 parser.add_argument("--data_dir", type=str, default="data/example/processed")
-parser.add_argument("--dave_config", type=str, default=None)
+parser.add_argument("--save_config", type=str, default=None)
 parser.add_argument("--save_checkpoint", type=str, default=None)
 parser.add_argument("--save_log", type=str, default=None)
 
@@ -68,6 +68,7 @@ def run_trainer(config):
         "{timestamp}"
     )
 
+    config["timestamp"] = timestamp
     run_name = run_name_format.format(**config)
 
     logger = get_logger(run_name, log_path=config["save_log"])

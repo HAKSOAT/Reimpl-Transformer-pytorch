@@ -36,9 +36,21 @@ class LabelSmoothingLoss(nn.Module):
         outputs_flat = outputs_log_sotmax.view(batch_size * seq_len, vocabulary_size)
         targets_flat = targets.view(batch_size, seq_len)
 
-        smoothed_targets = self.smoothed_targets.repeat(targets_flat.size(0), 1)
-        smoothed_targets.scatter_(1, targets_flat.unsqueeze(1), self.confidence)
-        smoothed_targets.masked_fill_((targets_flat == self.pad_index).unsqueeze(1), 0)
+        smoothed_targets = self.smoothed_targets.repeat(targets_flat.size(1), 1)
+        # Q: How does scatter work?
+        # A: https://jamesmccaffrey.wordpress.com/2020/12/18/the-pytorch-scatter-function-explained/
+        # https://pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_
+        # It takes a source matrix and an index matrix, using the index matrix to place data into a destination matrix.
+        # See it as all of the source is placed into the destination, but the corresponding position in the source and index
+        # is scattered based on the number in that index across the specified dimension. Sadly, it's hard to explain without visuals
+        # but the link helps.
+        smoothed_targets.scatter_(1, targets_flat, self.confidence)
+        # Q: How does masked_fill work?
+        # A: https://jamesmccaffrey.wordpress.com/2020/09/17/an-example-of-using-the-pytorch-masked_fill-function/
+        # I: The original code does this, but it does not work, I think the intention is just to confirm that pad indexes
+        # get the value of zero.
+        # smoothed_targets.masked_fill_((targets_flat == self.pad_index).unsqueeze(1), 0)
+        smoothed_targets[:, 0] = 0
 
         loss = self.criterion(outputs_flat, smoothed_targets)
         count = (targets != self.pad_index).sum().item()

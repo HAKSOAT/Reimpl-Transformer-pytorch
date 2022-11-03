@@ -69,12 +69,20 @@ class Transformer(nn.Module):
         sources_mask = pad_masking(sources, sources_len)
         # Q: Why is sources and inputs_len used here instead of inputs and inputs len?
         # A: Because memory mask is masking the encoder's embeddings which uses sources.
+        # Q: During inference, how is this inputs_len useful?
         memory_mask = pad_masking(sources, inputs_len)
+        # Q: What does subsequent_masking do?
+        # A: It enforces the masked language modelling approach, ensuring that only the words
+        # that come before the word to be predicted are already seen and that the words after it are never
+        # seen so that the model does not cheat.
         inputs_mask = subsequent_masking(inputs) | pad_masking(inputs, inputs_len)
 
         memory = self.encoder(sources, sources_mask)
         # Q: Since we are not passing state or layer_cache at this point,
         # I am concerned that it will never be used. So I need to run this code to check this out.
+        # A: The concern is right, the cache is never used during the training process. However, it is used
+        # during predictions. Truly, it does not make sense to cache during training as the weights will be
+        # updated during backprop, making the stored weights irrelevant if cached.
         outputs, state = self.decoder(inputs, memory, memory_mask, inputs_mask)
         return outputs
 
@@ -101,7 +109,7 @@ class TransformerEncoder(nn.Module):
         return sources
 
 
-class TransformerDecoder:
+class TransformerDecoder(nn.Module):
     def __init__(self, layers_count, d_model, heads_count, d_ff, dropout_prob, embedding):
         super(TransformerDecoder, self).__init__()
 
@@ -111,7 +119,7 @@ class TransformerDecoder:
             [TransformerDecoderLayer(d_model, heads_count, d_ff, dropout_prob) for _ in range(layers_count)]
         )
         # Q: What do embedding_dim and num_embedding mean here?
-        # A: Embedding_dim is the dimension for each token's embedding while num_embeddings refers to the number of tokens.
+        # A: Embedding_dim is the dimension for each token's embedding while num_embeddings refers to the vocab size.
         self.generator = nn.Linear(embedding.embedding_dim, embedding.num_embeddings)
         self.generator.weight = self.embedding.weight
 
@@ -119,6 +127,8 @@ class TransformerDecoder:
         inputs = self.embedding(inputs)
 
         for layer_index, decoder_layer in enumerate(self.decoder_layers):
+            # I: It is at this point that the embeddings from the last layer of the encoder are
+            # sent into the decoder. memory indicates the embeddings from the last layer of the encoder.
             if state is None:
                 inputs = decoder_layer(inputs, memory, memory_mask, inputs_mask)
             else:
@@ -128,8 +138,6 @@ class TransformerDecoder:
                 # I: I find it very interesting how the state is used here, I am not sure yet
                 # but I think this is how the keys and values from the encoder and relayed to the
                 # decoder.
-                # Update: Yes, exactly the key and values in the memory attention are the embeddings
-                # passed from the encoder part of the set up.
                 state.update_state(
                     layer_index=layer_index,
                     layer_mode="self-attention",
@@ -152,8 +160,8 @@ class TransformerDecoder:
         return DecoderState()
 
 
-class MultiHeadAttention:
-    def __init__(self, heads_count, d_model, dropout_prob, mode="self_attention"):
+class MultiHeadAttention(nn.Module):
+    def __init__(self, heads_count, d_model, dropout_prob, mode="self-attention"):
         super(MultiHeadAttention, self).__init__()
 
         # I: This is super cool, checking that the heads_counts can divide the model's dimension
@@ -209,6 +217,11 @@ class MultiHeadAttention:
             elif self.mode == "memory-attention":
                 # I: I find it interesting that the same key and value from the encoder are used on all layers of
                 # multi-head attention (note, not masked multi-head) in the decoder.
+                # I: I also find it interesting that it is the projection being used here i.e. the result of the
+                # already done multiplication of the key weights and the vocab embeddings.
+                # I: I have seen why now, it is useful during the prediction phase, since the keys and values from the
+                # encoder are the same through all iterations, it is cached after the first projection where the cache
+                # in that layer is None.
                 key_projected = layer_cache[self.mode]["key_projected"]
                 value_projected = layer_cache[self.mode]["value_projected"]
 
@@ -272,6 +285,7 @@ class MultiHeadAttention:
         # such that stride and offset operations look like the tensor actually changed to the shape described
         # in any of the operations metioned (or others like it), but the underlying tensor does not change.
         # Contiguous forces an underlying tensor to be created that exactly matches that shape.
+        # A: What contiguous means: https://discuss.pytorch.org/t/contigious-vs-non-contigious-tensor/30107/2
         context_sequence = context_heads.transpose(1, 2).contiguous()
         # I: This is really nice too, restructuring back to the initial shape before dividing in multiple heads.
         context = context_sequence.view(batch_size, query_len, d_model)
@@ -335,6 +349,11 @@ class TransformerDecoderLayer(nn.Module):
 
     def forward(self, inputs, memory, memory_mask, inputs_mask, layer_cache=None):
         inputs = self.self_attention_layer(inputs, inputs, inputs, inputs_mask, layer_cache)
+        # I: I think it is confusing that memory is being passed in here if it is never used in the memory attention
+        # layer. Instead it is the key and value projections existing in layer_cache that is being used.
+        # Update: Actually, I did not understand properly the other time. The decoder has its own key and value weights,
+        # What it needs are the embeddings from the last layer of the decoder and it multiplies that by its own key and value
+        # weights.
         inputs = self.memory_attention_layer(inputs, memory, memory, memory_mask, layer_cache)
         inputs = self.pointwise_feedforward_layer(inputs)
         return inputs
@@ -391,11 +410,14 @@ class DecoderState:
             for mode in ("self-attention", "memory-attention"):
                 if self.layer_caches[layer_index][mode] is not None:
                     for projection in self.layer_caches[layer_index][mode]:
-                        cache = self.layer_cache[layer_index][mode][projection]
+                        cache = self.layer_caches[layer_index][mode][projection]
                         if cache is not None:
                             # In the post: https://discuss.pytorch.org/t/which-copy-is-better/56393/5
                             # The moderators say data.copy_ should not longer be used, so I am modifying
                             # cache.data.copy_(cache.data.index_select(0, positions))
                             # Q: Why is this copy here being done?
+                            # A: It is replacing the cache tensor with the tensor resulting from the index_select
+                            # positions here are the ids that have the most probability score for each token generation
+                            # attempt during inference.
                             with torch.no_grad():
                                 cache.copy_(cache.data.index_select(0, positions))

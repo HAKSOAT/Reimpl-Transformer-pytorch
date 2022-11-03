@@ -110,6 +110,11 @@ class EpochSeq2SeqTrainer:
                                        targets.to(self.device)
             # Q: I need to understand properly how the source, inputs and targets are used in training and in
             # evaluation. This is because during inference, inputs and targets won't be available.
+            # A: The source text is passed into the encoder which creates the keys and values.
+            # The decoder takes in a first the special token <StartSent>, and uses this in combination
+            # with the keys and values from the encoder to predict the first translated word.
+            # Then it takes in that <StartSent> token and the first word, then uses this to predict the
+            # second translated word and so on and so forth.
             outputs = self.model(sources, inputs)
 
             batch_loss, batch_count = self.loss_function(outputs, targets)
@@ -125,7 +130,7 @@ class EpochSeq2SeqTrainer:
                 self.optimizer.step()
 
             batch_losses.append(batch_loss.item())
-            batch_count.append(batch_count)
+            batch_counts.append(batch_count)
 
             batch_metric, batch_metric_count = self.metric_function(outputs, targets)
             batch_metrics.append(batch_metric)

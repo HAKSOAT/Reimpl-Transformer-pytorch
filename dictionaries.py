@@ -25,6 +25,9 @@ class IndexDictionary:
     def index_sentence(self, sentence):
         return [self.token_to_index(token) for token in sentence]
 
+    def tokenify_indexes(self, token_indexes):
+        return [self.index_to_token(token_index) for token_index in token_indexes]
+
     def _build_vocabulary(self, iterable, vocabulary_size):
         # Q: Why is setting of vocabulary size needed?
         counter = Counter()
@@ -60,7 +63,7 @@ class IndexDictionary:
 
         vocab_tokens = {}
         token_counts = []
-        with open(vocabulary_filepath) as file:
+        with open(vocabulary_filepath, encoding="utf-8") as file:
             for line in file:
                 vocab_index, vocab_token, count = line.strip().split(FILE_SEP)
                 vocab_tokens[int(vocab_index)] = vocab_token
@@ -83,3 +86,9 @@ class IndexDictionary:
         instance.vocabulary_size = len(vocab_tokens)
 
         return instance
+
+    def index_to_token(self, index):
+        if index >= self.vocabulary_size:
+            return self.vocab_tokens[UNK_TOKEN]
+        else:
+            return self.vocab_tokens[index]

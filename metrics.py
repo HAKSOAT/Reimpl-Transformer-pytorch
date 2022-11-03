@@ -1,7 +1,7 @@
 from torch import nn
 
 
-class AccuracyMetric:
+class AccuracyMetric(nn.Module):
     def __init__(self, pad_index=0):
         super(AccuracyMetric, self).__init__()
 

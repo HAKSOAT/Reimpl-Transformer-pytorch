@@ -162,6 +162,16 @@ class IndexedInputTargetTranslationDataset:
             return self.limit
 
     @staticmethod
+    def preprocess(source_dictionary):
+
+        def preprocess_function(source):
+            source_tokens = source.strip().split()
+            indexed_source = source_dictionary.index_sentence(source_tokens)
+            return indexed_source
+
+        return preprocess_function
+
+    @staticmethod
     def prepare(data_dir, source_dictionary, target_dictionary):
 
         join_indexes = lambda indexes: INDEX_FILE_SEP.join(str(index) for index in indexes)
